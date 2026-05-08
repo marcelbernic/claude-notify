@@ -1,11 +1,13 @@
 # claude-notify
 
-Per-pane sound notifications for Claude Code. Plays a configurable sound
-when Claude finishes a turn or needs your attention. Built for tmux users
-running multiple Claude sessions in parallel — each pane plays a different
-sound, so you can tell which one needs you without looking.
+Per-project sound notifications for Claude Code. Plays a configurable
+sound when Claude finishes a turn or needs your attention. Each project
+(repo / working directory) plays its own sound, no matter which tmux
+pane or terminal window it's in — open ten panes against the same repo,
+they all share the same sound; switch to a different repo, you hear a
+different one.
 
-> Status: v0.1 — works on macOS, single-author, no Linux/Windows support
+> Status: v0.2 — works on macOS, single-author, no Linux/Windows support
 > yet. Friends-and-family release. Bug reports and PRs welcome.
 
 ---
@@ -21,13 +23,13 @@ Restart Claude Code after install (hooks are loaded once at startup).
 
 ## Usage
 
-In any Claude Code session inside a tmux pane:
+In any Claude Code session, from inside a project directory:
 
 ```
 /notify list           # see available sounds
-/notify frog           # this pane plays frog from now on
+/notify frog           # this project plays frog from now on
 /notify test           # replay the currently set sound
-/notify off            # clear this pane (revert to default)
+/notify off            # clear this project (revert to default)
 /notify add ~/Downloads/cow.wav         # copy a custom sound into your library
 /notify add ~/Downloads/cow.wav as moo  # …and rename it on the way in
 ```
@@ -36,8 +38,8 @@ After `/notify frog`, you'll hear the frog sound when:
 - Claude finishes a turn (`Stop` event)
 - Claude needs your input — permission prompts, idle waits, MCP elicitations (`Notification` event)
 
-Open more tmux panes, give each a different sound, run Claude in each.
-You'll always know which pane is calling for you.
+Run Claude in different repos, give each a different sound. You'll
+always know which project is calling for you.
 
 ## How it works
 
@@ -45,19 +47,26 @@ Two hooks register on install:
 
 | Hook event | Fires on | Action |
 |---|---|---|
-| `Stop` | Claude finishes its response | Play the pane's configured sound |
+| `Stop` | Claude finishes its response | Play the project's configured sound |
 | `Notification` | Claude needs user attention | Same script, same sound |
+
+The sound to play is keyed by **project**, derived from the working
+directory:
+
+1. If `cwd` is inside a git repo, slug = basename of `git rev-parse --show-toplevel`.
+2. Otherwise, slug = basename of `cwd`.
+3. Slug is lowercased; non-alphanumeric runs collapse to `-`.
 
 State lives outside the plugin so it survives upgrades and uninstalls
 cleanly:
 
 ```
 ~/.claude/data/notify/
-├── library/          # your custom-added sounds
+├── library/                          # your custom-added sounds
 └── state/
-    ├── pane-40.txt   # contents: "frog"   (set via /notify frog in pane %40)
-    ├── pane-41.txt   # contents: "morse"
-    └── default.txt   # used when not in tmux
+    ├── project-claude-notify.txt     # contents: "frog"
+    ├── project-numa-app.txt          # contents: "cow"
+    └── default.txt                   # used when no project resolves
 ```
 
 The plugin's bundled sounds live in `${CLAUDE_PLUGIN_ROOT}/sounds/library/`
@@ -65,17 +74,30 @@ and are read-only. The script searches your user library first, then the
 bundled library — so a custom `frog.wav` in user lib overrides the
 bundled `frog.aiff`.
 
+### Resolution chain
+
+When a hook fires, the script picks the first match from this ordered
+list:
+
+1. **`project-<slug>.txt`** — what `/notify` writes.
+2. **`pane-<id>.txt`** — *legacy*, kept readable so v0.1 installs don't
+   go silent. Never written by v0.2+.
+3. **`default.txt`** — last-resort fallback.
+
+Run `notify-sound.sh key` from inside a project to see the chain and
+which key wins.
+
 ## Per-event sounds (advanced)
 
 Want different sounds for "Claude finished" vs "Claude needs input"?
 Bypass `/notify` and write directly:
 
 ```bash
-echo morse     > ~/.claude/data/notify/state/pane-40.stop
-echo submarine > ~/.claude/data/notify/state/pane-40.notify
+echo morse     > ~/.claude/data/notify/state/project-claude-notify.stop
+echo submarine > ~/.claude/data/notify/state/project-claude-notify.notify
 ```
 
-These take precedence over the generic `pane-40.txt`.
+These take precedence over the generic `project-claude-notify.txt`.
 
 ## Caveats
 
@@ -86,10 +108,11 @@ swapping for `paplay`/`aplay`. PRs welcome.
 at Claude Code startup. The session you installed from won't fire hooks
 until you restart it.
 
-**3. `$TMUX_PANE` must propagate.** The pane key relies on `$TMUX_PANE`
-being in Claude Code's environment, which requires you launched `claude`
-from inside a tmux pane (the standard way). Outside tmux, all sessions
-share the `default` key.
+**3. Same-named projects collide.** Two unrelated repos both named
+`foo` (e.g. `~/work/foo` and `~/personal/foo`) share the same slug
+`project-foo` and therefore the same sound. Workaround: rename one of
+the directories. Long-term: append a short path-hash if this bites
+people in practice.
 
 **4. Sounds overlap on rapid events.** If Claude finishes a turn and
 immediately needs input on the next tool call, both hooks fire — you'll
@@ -114,10 +137,10 @@ the JSON payload.
 # Verify the script works in isolation
 bash "${CLAUDE_PLUGIN_ROOT:-$(dirname $0)}/hooks-handlers/notify-sound.sh" help
 
-# Check what key your current pane resolves to
+# Show the resolution chain and which key wins for the current cwd
 bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" key
 
-# Check what sound is configured
+# Check what sound is configured (and play it)
 bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" test
 ```
 
@@ -126,7 +149,7 @@ If sounds don't play after install:
 2. Run `/plugin list` and confirm `notify@claude-notify` is enabled.
 3. Run the script manually with a fake event payload:
    ```
-   echo '{}' | bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" stop
+   echo '{"cwd":"'"$PWD"'"}' | bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" stop
    ```
 
 ## Bundled sounds and licensing
@@ -148,11 +171,11 @@ licensed. See `LICENSE`.
 ## Roadmap
 
 - [ ] Linux support (paplay/aplay branch in the script)
-- [ ] Volume control: `/notify volume 0.3` per pane
+- [ ] Volume control: `/notify volume 0.3` per project
 - [ ] Optional spoken project name via `say` on Stop
 - [ ] Subtype filtering for `Notification` (silence `auth_success`)
 - [ ] Per-event sounds via skill (no manual file editing)
-- [ ] Rate limit: max one sound per N seconds per pane
+- [ ] Rate limit: max one sound per N seconds per project
 - [ ] Cross-platform sound seeding on first run
 - [ ] Replace bundled Apple sounds with CC0 alternatives
 

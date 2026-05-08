@@ -1,7 +1,7 @@
 {
   "name": "notify",
-  "version": "0.1.0",
-  "description": "Per-pane sound notifications for Claude Code. Plays a configurable sound when Claude finishes a turn or needs your attention. Built for tmux users running multiple Claude sessions in parallel.",
+  "version": "0.2.0",
+  "description": "Per-project sound notifications for Claude Code. Plays a configurable sound when Claude finishes a turn or needs your attention. Each repo gets its own sound across panes.",
   "author": {
     "name": "Marcel Bernic",
     "email": "marcel@numa.com"
