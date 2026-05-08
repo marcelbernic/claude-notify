@@ -1,0 +1,27 @@
+{
+  "description": "Plays a per-pane sound when Claude finishes a turn (Stop) or needs user attention (Notification).",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh\" stop"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh\" notify"
+          }
+        ]
+      }
+    ]
+  }
+}
