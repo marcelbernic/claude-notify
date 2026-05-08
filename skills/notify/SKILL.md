@@ -1,11 +1,11 @@
 ---
 name: notify
 description: >
-  Configure the per-pane notification sound for the current Claude Code
+  Configure the per-project notification sound for the current Claude Code
   session. Use when the user invokes /notify with a sound name, or with one
   of the subcommands: list, off, test, add. Sets which sound fires on Stop
-  and Notification hooks for the current tmux pane (or "default" key when
-  not in tmux).
+  and Notification hooks for the current project (keyed by git-root /
+  cwd basename).
 argument-hint: <sound> | list | off | test | add <path> [as <name>]
 ---
 
@@ -14,6 +14,10 @@ argument-hint: <sound> | list | off | test | add <path> [as <name>]
 Thin wrapper around `${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh`.
 The script implements all logic; this skill parses the user's argument
 string and calls the appropriate subcommand.
+
+The sound is bound to the **project** (the current cwd's git-root, or the
+cwd's basename when not in a git repo). All Claude panes/sessions
+operating in the same project share the same sound.
 
 ## How to handle the user's arguments
 
@@ -67,9 +71,13 @@ User: `/notify test` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-soun
   these. Surface the script's stderr to the user verbatim.
 - **`add` source path not readable**: the script exits non-zero with a
   clear message; surface it.
-- **Not in tmux**: `$TMUX_PANE` is empty, the resolved key becomes
-  `default`. The skill should mention this in the output: "Note: not
-  inside tmux — this sound will apply to all non-tmux Claude sessions."
+- **No project resolvable**: `set` and `off` refuse with "Cannot
+  determine project. Run /notify from inside a project directory."
+  Surface the script's error verbatim.
+- **Legacy `pane-<id>` state files**: still read as a fallback for users
+  upgrading from v0.1's pane-keyed scheme. Once the user runs `/notify`
+  in that project, the project-keyed file takes over and the legacy
+  pane file is shadowed.
 
 ## Per-event sounds (advanced)
 
@@ -77,9 +85,9 @@ To set different sounds for "Claude finished" vs "Claude needs input",
 the user can write directly to the state files:
 
 ```bash
-echo morse     > ~/.claude/data/notify/state/<key>.stop
-echo submarine > ~/.claude/data/notify/state/<key>.notify
+echo morse     > ~/.claude/data/notify/state/project-<slug>.stop
+echo submarine > ~/.claude/data/notify/state/project-<slug>.notify
 ```
 
-The skill does not expose this directly; only mention if asked. The script
-prefers `<key>.stop`/`<key>.notify` over the generic `<key>.txt`.
+Run `notify-sound.sh key` from the project to see the exact slug. The
+script prefers `<key>.stop`/`<key>.notify` over the generic `<key>.txt`.
