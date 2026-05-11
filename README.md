@@ -7,7 +7,7 @@ pane or terminal window it's in — open ten panes against the same repo,
 they all share the same sound; switch to a different repo, you hear a
 different one.
 
-> Status: v0.2 — works on macOS, single-author, no Linux/Windows support
+> Status: v0.3 — works on macOS, single-author, no Linux/Windows support
 > yet. Friends-and-family release. Bug reports and PRs welcome.
 
 ---
@@ -41,6 +41,38 @@ After `/notify frog`, you'll hear the frog sound when:
 Run Claude in different repos, give each a different sound. You'll
 always know which project is calling for you.
 
+## Sound packs
+
+A *sound pack* is a folder of audio files. Assign a pack to a project and
+each notification plays a random sound from the folder — handy when one
+sound on repeat starts wearing thin.
+
+```
+/notify pack list                       # available packs
+/notify pack StarCraft                  # this project plays random StarCraft sounds
+/notify pack contents                   # list sounds in the current pack
+/notify pack exclude zergling-rush      # mute one sound (the file stays on disk)
+/notify pack exclude marine-yes-sir nuclear-launch   # multiple at once
+/notify pack include zergling-rush      # bring it back
+/notify pack reset                      # clear all exclusions for the current pack
+/notify off                             # clear pack and any exclusions
+```
+
+Packs live in two locations, searched user-first:
+
+```
+~/.claude/data/notify/packs/<Name>/        # your own packs
+${CLAUDE_PLUGIN_ROOT}/sounds/packs/<Name>/ # bundled with the plugin
+```
+
+Drop any `.aiff`, `.mp3`, `.wav`, `.m4a`, or `.caf` files into a folder under
+either location — the folder name *is* the pack name.
+
+Exclusions are tracked **per project per pack**. If you exclude
+`zergling-rush` while on the `StarCraft` pack, switch to `Halo`, then come
+back to `StarCraft`, your exclusion is still in effect. They're cleared
+only by `/notify pack reset` or `/notify off`.
+
 ## How it works
 
 Two hooks register on install:
@@ -63,11 +95,28 @@ cleanly:
 ```
 ~/.claude/data/notify/
 ├── library/                          # your custom-added sounds
+├── packs/                            # your custom packs (folders)
 └── state/
-    ├── project-claude-notify.txt     # contents: "frog"
+    ├── project-claude-notify.txt     # single-sound assignment: "frog"
+    ├── project-claude-notify.json    # pack assignment + per-pack excludes
     ├── project-numa-app.txt          # contents: "cow"
     └── default.txt                   # used when no project resolves
 ```
+
+The `.json` file looks like:
+
+```json
+{
+  "pack": "StarCraft",
+  "excludeByPack": {
+    "StarCraft": ["zergling-rush"]
+  }
+}
+```
+
+When both `.json` (with a non-null `pack`) and `.txt` exist, the pack wins.
+Setting a single sound clears `pack` but preserves `excludeByPack` for
+future use; `/notify off` removes both files.
 
 The plugin's bundled sounds live in `${CLAUDE_PLUGIN_ROOT}/sounds/library/`
 and are read-only. The script searches your user library first, then the
@@ -76,13 +125,22 @@ bundled `frog.aiff`.
 
 ### Resolution chain
 
-When a hook fires, the script picks the first match from this ordered
-list:
+When a hook fires, the script walks each candidate key (project, then
+legacy pane, then default) and for each key checks state files in this
+order — first match wins:
 
-1. **`project-<slug>.txt`** — what `/notify` writes.
-2. **`pane-<id>.txt`** — *legacy*, kept readable so v0.1 installs don't
-   go silent. Never written by v0.2+.
-3. **`default.txt`** — last-resort fallback.
+1. **`<key>.<event>`** (`.stop` or `.notify`) — per-event single-sound
+   override (advanced; see below).
+2. **`<key>.json`** with a non-null `pack` — pack mode: pick a random
+   sound from the pack (minus any excludes).
+3. **`<key>.txt`** — single-sound assignment (what `/notify <name>` writes).
+
+Candidate keys, in order:
+
+1. **`project-<slug>`** — derived from cwd.
+2. **`pane-<id>`** — *legacy*, kept readable so v0.1 installs don't go
+   silent. Never written by v0.2+.
+3. **`default`** — last-resort fallback.
 
 Run `notify-sound.sh key` from inside a project to see the chain and
 which key wins.
@@ -175,6 +233,7 @@ licensed. See `LICENSE`.
 - [ ] Optional spoken project name via `say` on Stop
 - [ ] Subtype filtering for `Notification` (silence `auth_success`)
 - [ ] Per-event sounds via skill (no manual file editing)
+- [ ] Per-event packs (different pack for `Stop` vs `Notification`)
 - [ ] Rate limit: max one sound per N seconds per project
 - [ ] Cross-platform sound seeding on first run
 - [ ] Replace bundled Apple sounds with CC0 alternatives
