@@ -1,0 +1,49 @@
+name: Feature idea
+description: Share a cool feature you'd like to see in claude-notify
+title: "[Idea]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing! A short, concrete description beats a long, vague one.
+        Check the [Roadmap in the README](../../blob/main/README.md#roadmap) and
+        [open issues](../../issues?q=is%3Aissue+label%3Aenhancement) first to avoid duplicates.
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: What problem would this solve?
+      description: When does it bite you? A quick scenario helps a lot.
+      placeholder: "When I run 5 panes in parallel, I can't tell at a glance which already finished hours ago vs. just now."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would the feature look like?
+      description: A rough sketch — command, config knob, behavior. No need to design the full thing.
+      placeholder: "/notify mute 30m — temporarily silence this pane."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds you've tried
+      description: Optional. Helps gauge how blocked you are today.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform relevance
+      options:
+        - macOS only is fine
+        - Needs to work on Linux too
+        - Needs Windows support
+        - Doesn't matter
+    validations:
+      required: false
