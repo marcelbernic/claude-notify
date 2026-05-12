@@ -3,10 +3,11 @@ name: notify
 description: >
   Configure the per-project notification sound for the current Claude Code
   session. Use when the user invokes /notify with a sound name, or with one
-  of the subcommands: list, off, test, add, pack. Sets which sound (or sound
-  pack) fires on Stop and Notification hooks for the current project (keyed
-  by git-root / cwd basename).
-argument-hint: <sound> | pack <list|contents|exclude|include|reset|name> | list | off | test | add <path> [as <name>]
+  of the subcommands: list, off, test, add, pack, pause, resume, status. Sets
+  which sound (or sound pack) fires on Stop and Notification hooks for the
+  current project (keyed by git-root / cwd basename), and toggles pause state
+  per-project or globally.
+argument-hint: <sound> | pack <list|contents|exclude|include|reset|name> | list | off | test | add <path> [as <name>] | pause [all] | resume [all] | status
 ---
 
 ## Purpose
@@ -26,11 +27,14 @@ multiple words). The first word selects the action:
 
 | First word | Action |
 |---|---|
-| `list` | Run `notify-sound.sh list` |
-| `off`  | Run `notify-sound.sh off` |
-| `test` | Run `notify-sound.sh test` |
-| `add`  | Parse `add <path> [as <name>]`, run `notify-sound.sh add <path> [<name>]` |
-| `pack` | Route to the pack sub-dispatcher (see "Pack subcommand" below) |
+| `list`   | Run `notify-sound.sh list` |
+| `off`    | Run `notify-sound.sh off` |
+| `test`   | Run `notify-sound.sh test` |
+| `add`    | Parse `add <path> [as <name>]`, run `notify-sound.sh add <path> [<name>]` |
+| `pack`   | Route to the pack sub-dispatcher (see "Pack subcommand" below) |
+| `pause`  | Run `notify-sound.sh pause` (or `notify-sound.sh pause all` if `all` follows) |
+| `resume` | Run `notify-sound.sh resume` (or `notify-sound.sh resume all` if `all` follows) |
+| `status` | Run `notify-sound.sh status` |
 | anything else (single word) | Treat as a sound name; run `notify-sound.sh set <word>` |
 | empty | Show help: run `notify-sound.sh help` |
 
@@ -65,6 +69,14 @@ User: `/notify add ~/Downloads/moo.wav as cow` → `bash "${CLAUDE_PLUGIN_ROOT}/
 User: `/notify off` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" off`
 
 User: `/notify test` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" test`
+
+User: `/notify pause` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" pause`
+
+User: `/notify pause all` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" pause all`
+
+User: `/notify resume` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" resume`
+
+User: `/notify status` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" status`
 
 ## Pack subcommand
 
