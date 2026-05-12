@@ -9,6 +9,7 @@
 #   add <path> [as <name>]  Copy a custom sound into the user library.
 #   off                     Clear the current project's assignment.
 #   test                    Replay the current assignment (random pick if a pack).
+#   preview <name>          Play a single sound once without changing state.
 #   pause [all]             Silence this project (or all projects with `all`).
 #   resume [all]            Undo pause for this project (or all with `all`).
 #   status                  Show pause state, active sound, and resolution chain.
@@ -31,6 +32,11 @@
 #   ~/.claude/data/notify/state/<key>.notify Notification-event override
 #   ~/.claude/data/notify/state/<key>.paused per-project pause marker
 #   ~/.claude/data/notify/state/paused       global pause marker
+#   ~/.claude/data/notify/state/<key>.skip-once one-shot Stop-hook suppression
+#                                              (set by preview/set/test/pack
+#                                              so the trailing Stop hook
+#                                              doesn't double-play)
+#   ~/.claude/data/notify/cache/             converted-for-Linux audio (lazy)
 #
 # Key resolution chain (first match wins):
 #   1. project-<slug>     slug = basename of cwd's git-root (or cwd if not a repo)
@@ -53,6 +59,7 @@ USER_DATA="${HOME}/.claude/data/notify"
 USER_LIB="$USER_DATA/library"
 USER_PACKS="$USER_DATA/packs"
 STATE_DIR="$USER_DATA/state"
+CACHE_DIR="$USER_DATA/cache"
 DEFAULT_SOUND="default"
 SUPPORTED_EXTS=(aiff mp3 wav m4a caf)
 
@@ -292,22 +299,168 @@ pick_random_pack_sound() {
   return 1
 }
 
-play_detached() {
-  local file="$1"
-  if ! command -v afplay >/dev/null 2>&1; then
-    printf '[notify-sound] afplay not found (macOS only); cannot play %s\n' "$file" >&2
-    return 1
+# --- audio playback (cross-platform) ----------------------------------------
+
+# Player probe order: macOS first, then common Linux options. Players later in
+# the list (aplay) handle fewer formats; we lean on prepare_playable_file to
+# bridge the gap via conversion.
+AUDIO_PLAYERS=(afplay paplay pw-play ffplay play mpv aplay)
+_AUDIO_PLAYER=""
+_AUDIO_PLAYER_PROBED=0
+_WARNED_NO_PLAYER=0
+_WARNED_CONVERT=0
+
+# Echo the first available audio player (or empty); cache after first probe.
+select_audio_player() {
+  if [ "$_AUDIO_PLAYER_PROBED" -eq 1 ]; then
+    printf '%s' "$_AUDIO_PLAYER"
+    return 0
   fi
-  ( afplay "$file" >/dev/null 2>&1 & ) >/dev/null 2>&1
+  _AUDIO_PLAYER_PROBED=1
+  local p
+  for p in "${AUDIO_PLAYERS[@]}"; do
+    if command -v "$p" >/dev/null 2>&1; then
+      _AUDIO_PLAYER="$p"
+      break
+    fi
+  done
+  printf '%s' "$_AUDIO_PLAYER"
+}
+
+# Invoke <player> on <file>. mode = "detached" (background) or "blocking".
+play_with() {
+  local player="$1" file="$2" mode="$3"
+  local cmd=()
+  case "$player" in
+    afplay)               cmd=(afplay "$file") ;;
+    paplay|pw-play)       cmd=("$player" "$file") ;;
+    aplay)                cmd=(aplay -q "$file") ;;
+    ffplay)               cmd=(ffplay -nodisp -autoexit -loglevel quiet "$file") ;;
+    play)                 cmd=(play -q "$file") ;;
+    mpv)                  cmd=(mpv --really-quiet --no-video "$file") ;;
+    *) return 127 ;;
+  esac
+  if [ "$mode" = "detached" ]; then
+    ( "${cmd[@]}" >/dev/null 2>&1 & ) >/dev/null 2>&1
+  else
+    "${cmd[@]}" >/dev/null 2>&1
+  fi
+}
+
+# 0 if the file should be converted to WAV before passing to <player>.
+needs_conversion() {
+  local player="$1" file="$2" ext
+  ext="${file##*.}"
+  ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
+  case "$player" in
+    afplay|ffplay|mpv|play) return 1 ;;       # handle ~everything we ship
+    paplay|pw-play)
+      case "$ext" in
+        wav|aiff|aif|aifc|flac|ogg|oga|au) return 1 ;;
+        *) return 0 ;;
+      esac ;;
+    aplay)
+      case "$ext" in wav) return 1 ;; *) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# Short stable hash of a string. shasum is on macOS; sha1sum on Linux.
+hash_path() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum | cut -c1-12
+  elif command -v sha1sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha1sum | cut -c1-12
+  else
+    printf '%s' "$1" | tr -c 'a-zA-Z0-9' '_'
+  fi
+}
+
+# Convert <src> to <dst> as WAV using whichever tool is available. 0 on success.
+convert_to_wav() {
+  local src="$1" dst="$2" tmp
+  mkdir -p "$(dirname "$dst")"
+  tmp="${dst}.tmp.$$.wav"
+  if command -v ffmpeg >/dev/null 2>&1; then
+    if ffmpeg -y -loglevel error -i "$src" -f wav "$tmp" >/dev/null 2>&1; then
+      mv "$tmp" "$dst" && return 0
+    fi
+  elif command -v sox >/dev/null 2>&1; then
+    if sox "$src" -t wav "$tmp" >/dev/null 2>&1; then
+      mv "$tmp" "$dst" && return 0
+    fi
+  elif command -v afconvert >/dev/null 2>&1; then
+    if afconvert -f WAVE -d LEI16 "$src" "$tmp" >/dev/null 2>&1; then
+      mv "$tmp" "$dst" && return 0
+    fi
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# Return a path the selected player can play. Lazily converts and caches.
+# Falls back to the original path with a warning if conversion isn't possible.
+prepare_playable_file() {
+  local file="$1" player
+  player="$(select_audio_player)"
+  if [ -z "$player" ] || ! needs_conversion "$player" "$file"; then
+    printf '%s' "$file"
+    return 0
+  fi
+  local base hash cached
+  base="$(basename "$file")"
+  base="${base%.*}"
+  hash="$(hash_path "$file")"
+  cached="$CACHE_DIR/${base}-${hash}.wav"
+  if [ -r "$cached" ]; then
+    printf '%s' "$cached"
+    return 0
+  fi
+  if convert_to_wav "$file" "$cached"; then
+    printf '%s' "$cached"
+    return 0
+  fi
+  if [ "$_WARNED_CONVERT" -eq 0 ]; then
+    printf '[notify-sound] cannot convert %s for player %s — install ffmpeg or sox; playback may fail\n' \
+      "$file" "$player" >&2
+    _WARNED_CONVERT=1
+  fi
+  printf '%s' "$file"
+}
+
+_warn_no_player() {
+  if [ "$_WARNED_NO_PLAYER" -eq 0 ]; then
+    printf '[notify-sound] no audio player found (looked for: %s)\n' "${AUDIO_PLAYERS[*]}" >&2
+    _WARNED_NO_PLAYER=1
+  fi
+}
+
+play_detached() {
+  local file="$1" player playable
+  player="$(select_audio_player)"
+  if [ -z "$player" ]; then _warn_no_player; return 1; fi
+  playable="$(prepare_playable_file "$file")"
+  play_with "$player" "$playable" detached
 }
 
 play_blocking() {
-  local file="$1"
-  if ! command -v afplay >/dev/null 2>&1; then
-    printf '[notify-sound] afplay not found (macOS only)\n' >&2
+  local file="$1" player playable
+  player="$(select_audio_player)"
+  if [ -z "$player" ]; then _warn_no_player; return 1; fi
+  playable="$(prepare_playable_file "$file")"
+  if ! play_with "$player" "$playable" blocking; then
+    printf '[notify-sound] %s failed to play %s\n' "$player" "$playable" >&2
     return 1
   fi
-  afplay "$file"
+}
+
+# Suppress the next sound-playing hook fire for this project. User-facing
+# commands (preview, set, test, pack <name>) call this so the Stop hook that
+# fires when Claude echoes the slash-command output doesn't double-play.
+mark_skip_next() {
+  local key
+  key="$(resolve_project_key)"
+  [ -n "$key" ] && : > "$STATE_DIR/$key.skip-once"
 }
 
 # Validate a name token (sound or pack) — no slashes, spaces, or leading dot.
@@ -328,9 +481,18 @@ cmd_play() {
   local cwd_hint
   cwd_hint="$(read_hook_cwd)"
 
-  [ -e "$STATE_DIR/paused" ] && exit 0
   local pkey
   pkey="$(resolve_project_key "$cwd_hint")"
+
+  # One-shot skip: a user-facing command just played a sound and doesn't want
+  # the trailing Stop hook to double-play. Consume the marker before the pause
+  # checks so previewing while paused doesn't leave the marker orphaned.
+  if [ -n "$pkey" ] && [ -e "$STATE_DIR/$pkey.skip-once" ]; then
+    rm -f "$STATE_DIR/$pkey.skip-once"
+    exit 0
+  fi
+
+  [ -e "$STATE_DIR/paused" ] && exit 0
   [ -n "$pkey" ] && [ -e "$STATE_DIR/$pkey.paused" ] && exit 0
 
   local sound="" file="" winning_key=""
@@ -420,6 +582,7 @@ cmd_set() {
   # exclusions are preserved for if/when the user comes back.
   state_clear_pack "$key" || true
   printf '%s will now play: %s\n' "$key" "$sound"
+  mark_skip_next
   play_blocking "$file" || true
 }
 
@@ -488,7 +651,8 @@ cmd_off() {
     echo "Cannot determine project. Run /notify off from inside a project directory." >&2
     exit 1
   fi
-  rm -f "$STATE_DIR/$key.txt" "$STATE_DIR/$key.stop" "$STATE_DIR/$key.notify" "$STATE_DIR/$key.json"
+  rm -f "$STATE_DIR/$key.txt" "$STATE_DIR/$key.stop" "$STATE_DIR/$key.notify" \
+        "$STATE_DIR/$key.json" "$STATE_DIR/$key.skip-once"
   printf '%s reset to default sound.\n' "$key"
 }
 
@@ -556,6 +720,24 @@ resolve_active_sound() {
   printf '%s\n%s\n\n%s\n\n' "$winning_key" "$stop_sound" "$notify_sound"
 }
 
+cmd_preview() {
+  local sound="${1:-}"
+  if [ -z "$sound" ]; then
+    echo "Usage: notify-sound.sh preview <sound>" >&2
+    exit 1
+  fi
+  validate_name "$sound" || exit 1
+  local file
+  file="$(find_sound_file "$sound" || true)"
+  if [ -z "$file" ]; then
+    echo "Sound '$sound' not in library. Try: notify-sound.sh list" >&2
+    exit 1
+  fi
+  printf 'Previewing: %s\n' "$sound"
+  mark_skip_next
+  play_blocking "$file" || true
+}
+
 cmd_test() {
   local winning_key stop_sound stop_file notify_sound notify_file
   { read -r winning_key
@@ -574,6 +756,7 @@ cmd_test() {
     printf 'Sound "%s" not in library (Stop).\n' "$stop_sound" >&2
     exit 1
   fi
+  mark_skip_next
   play_blocking "$stop_file"
 
   if [ "$notify_sound" != "$stop_sound" ] || [ "$notify_file" != "$stop_file" ]; then
@@ -754,6 +937,7 @@ cmd_pack_set() {
     local sound="${picked%%$'\t'*}"
     local file="${picked#*$'\t'}"
     printf '  Preview: %s\n' "$sound"
+    mark_skip_next
     play_blocking "$file" || true
   fi
 }
@@ -911,6 +1095,7 @@ case "$cmd" in
   add)         cmd_add    "$@" ;;
   off)         cmd_off ;;
   test)        cmd_test ;;
+  preview)     cmd_preview "$@" ;;
   pause)       cmd_pause  "$@" ;;
   resume)      cmd_resume "$@" ;;
   status)      cmd_status ;;
