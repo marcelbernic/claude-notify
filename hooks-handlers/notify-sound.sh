@@ -32,6 +32,10 @@
 #   ~/.claude/data/notify/state/<key>.notify Notification-event override
 #   ~/.claude/data/notify/state/<key>.paused per-project pause marker
 #   ~/.claude/data/notify/state/paused       global pause marker
+#   ~/.claude/data/notify/state/<key>.skip-once one-shot Stop-hook suppression
+#                                              (set by preview/set/test/pack
+#                                              so the trailing Stop hook
+#                                              doesn't double-play)
 #   ~/.claude/data/notify/cache/             converted-for-Linux audio (lazy)
 #
 # Key resolution chain (first match wins):
@@ -450,6 +454,15 @@ play_blocking() {
   fi
 }
 
+# Suppress the next sound-playing hook fire for this project. User-facing
+# commands (preview, set, test, pack <name>) call this so the Stop hook that
+# fires when Claude echoes the slash-command output doesn't double-play.
+mark_skip_next() {
+  local key
+  key="$(resolve_project_key)"
+  [ -n "$key" ] && : > "$STATE_DIR/$key.skip-once"
+}
+
 # Validate a name token (sound or pack) — no slashes, spaces, or leading dot.
 validate_name() {
   case "${1:-}" in
@@ -468,9 +481,18 @@ cmd_play() {
   local cwd_hint
   cwd_hint="$(read_hook_cwd)"
 
-  [ -e "$STATE_DIR/paused" ] && exit 0
   local pkey
   pkey="$(resolve_project_key "$cwd_hint")"
+
+  # One-shot skip: a user-facing command just played a sound and doesn't want
+  # the trailing Stop hook to double-play. Consume the marker before the pause
+  # checks so previewing while paused doesn't leave the marker orphaned.
+  if [ -n "$pkey" ] && [ -e "$STATE_DIR/$pkey.skip-once" ]; then
+    rm -f "$STATE_DIR/$pkey.skip-once"
+    exit 0
+  fi
+
+  [ -e "$STATE_DIR/paused" ] && exit 0
   [ -n "$pkey" ] && [ -e "$STATE_DIR/$pkey.paused" ] && exit 0
 
   local sound="" file="" winning_key=""
@@ -560,6 +582,7 @@ cmd_set() {
   # exclusions are preserved for if/when the user comes back.
   state_clear_pack "$key" || true
   printf '%s will now play: %s\n' "$key" "$sound"
+  mark_skip_next
   play_blocking "$file" || true
 }
 
@@ -628,7 +651,8 @@ cmd_off() {
     echo "Cannot determine project. Run /notify off from inside a project directory." >&2
     exit 1
   fi
-  rm -f "$STATE_DIR/$key.txt" "$STATE_DIR/$key.stop" "$STATE_DIR/$key.notify" "$STATE_DIR/$key.json"
+  rm -f "$STATE_DIR/$key.txt" "$STATE_DIR/$key.stop" "$STATE_DIR/$key.notify" \
+        "$STATE_DIR/$key.json" "$STATE_DIR/$key.skip-once"
   printf '%s reset to default sound.\n' "$key"
 }
 
@@ -710,6 +734,7 @@ cmd_preview() {
     exit 1
   fi
   printf 'Previewing: %s\n' "$sound"
+  mark_skip_next
   play_blocking "$file" || true
 }
 
@@ -731,6 +756,7 @@ cmd_test() {
     printf 'Sound "%s" not in library (Stop).\n' "$stop_sound" >&2
     exit 1
   fi
+  mark_skip_next
   play_blocking "$stop_file"
 
   if [ "$notify_sound" != "$stop_sound" ] || [ "$notify_file" != "$stop_file" ]; then
@@ -911,6 +937,7 @@ cmd_pack_set() {
     local sound="${picked%%$'\t'*}"
     local file="${picked#*$'\t'}"
     printf '  Preview: %s\n' "$sound"
+    mark_skip_next
     play_blocking "$file" || true
   fi
 }
