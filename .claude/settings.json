@@ -1,5 +1,3 @@
 {
-  "enabledPlugins": {
-    "notify@claude-notify": true
-  }
+  "enabledPlugins": {}
 }
