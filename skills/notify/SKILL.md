@@ -3,11 +3,11 @@ name: notify
 description: >
   Configure the per-project notification sound for the current Claude Code
   session. Use when the user invokes /notify with a sound name, or with one
-  of the subcommands: list, off, test, add, pause, resume, status. Sets
-  which sound fires on Stop and Notification hooks for the current project
-  (keyed by git-root / cwd basename), and toggles pause state per-project
-  or globally.
-argument-hint: <sound> | list | off | test | add <path> [as <name>] | pause [all] | resume [all] | status
+  of the subcommands: list, off, test, add, pack, pause, resume, status. Sets
+  which sound (or sound pack) fires on Stop and Notification hooks for the
+  current project (keyed by git-root / cwd basename), and toggles pause state
+  per-project or globally.
+argument-hint: <sound> | pack <list|contents|exclude|include|reset|name> | list | off | test | add <path> [as <name>] | pause [all] | resume [all] | status
 ---
 
 ## Purpose
@@ -31,6 +31,7 @@ multiple words). The first word selects the action:
 | `off`    | Run `notify-sound.sh off` |
 | `test`   | Run `notify-sound.sh test` |
 | `add`    | Parse `add <path> [as <name>]`, run `notify-sound.sh add <path> [<name>]` |
+| `pack`   | Route to the pack sub-dispatcher (see "Pack subcommand" below) |
 | `pause`  | Run `notify-sound.sh pause` (or `notify-sound.sh pause all` if `all` follows) |
 | `resume` | Run `notify-sound.sh resume` (or `notify-sound.sh resume all` if `all` follows) |
 | `status` | Run `notify-sound.sh status` |
@@ -76,6 +77,41 @@ User: `/notify pause all` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify
 User: `/notify resume` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" resume`
 
 User: `/notify status` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" status`
+
+## Pack subcommand
+
+A *pack* is a folder of audio files. When a pack is assigned, each notification
+plays a random sound from the folder. Bundled packs live at
+`${CLAUDE_PLUGIN_ROOT}/sounds/packs/<Name>/`; user packs live at
+`~/.claude/data/notify/packs/<Name>/`.
+
+Routing for the pack sub-form. The user input always begins with `pack`; the
+second word selects the action (any unrecognized second word is treated as a
+pack name to assign):
+
+| Input | Script call |
+|---|---|
+| `pack list` | `notify-sound.sh pack list` |
+| `pack contents` | `notify-sound.sh pack contents` |
+| `pack contents <name>` | `notify-sound.sh pack contents <name>` |
+| `pack exclude <sound>...` | `notify-sound.sh pack exclude <sound>...` |
+| `pack include <sound>...` | `notify-sound.sh pack include <sound>...` |
+| `pack reset` | `notify-sound.sh pack reset` |
+| `pack <name>` (anything else) | `notify-sound.sh pack <name>` (the script's `pack` dispatcher routes the unknown second word to assignment) |
+
+Per-pack exclusions persist for the project: switching from one pack to another
+and back retains the previously-excluded sounds. `/notify off` clears both
+single-sound and pack assignments (including exclusions) for the project.
+
+### Examples
+
+User: `/notify pack list` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" pack list`
+
+User: `/notify pack StarCraft` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" pack StarCraft`
+
+User: `/notify pack contents` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" pack contents`
+
+User: `/notify pack exclude zergling-rush nuclear-launch` → `bash "${CLAUDE_PLUGIN_ROOT}/hooks-handlers/notify-sound.sh" pack exclude zergling-rush nuclear-launch`
 
 ## Edge cases
 

@@ -1,6 +1,6 @@
 {
   "name": "claude-notify",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Marketplace for the claude-notify plugin",
   "owner": {
     "name": "Marcel Bernic",
@@ -10,8 +10,8 @@
     {
       "name": "notify",
       "source": "./",
-      "description": "Per-project sound notifications for Claude Code",
-      "version": "0.2.0"
+      "description": "Per-project sound notifications for Claude Code, with sound-pack (random selection) support",
+      "version": "0.3.0"
     }
   ]
 }
