@@ -9,6 +9,9 @@
 #   add <path> [as <name>]  Copy a custom sound into the user library.
 #   off                     Clear the current project's sound (revert to default).
 #   test                    Replay the currently configured sound.
+#   pause [all]             Silence this project (or all projects with `all`).
+#   resume [all]            Undo pause for this project (or all with `all`).
+#   status                  Show pause state, active sound, and resolution chain.
 #   key                     Print the resolution chain and which key wins.
 #
 # Layout:
@@ -17,6 +20,8 @@
 #   ~/.claude/data/notify/state/<key>.txt   sound assignment
 #   ~/.claude/data/notify/state/<key>.stop  Stop-event override (advanced)
 #   ~/.claude/data/notify/state/<key>.notify Notification-event override
+#   ~/.claude/data/notify/state/<key>.paused per-project pause marker
+#   ~/.claude/data/notify/state/paused       global pause marker
 #
 # Key resolution chain (first match wins):
 #   1. project-<slug>     slug = basename of cwd's git-root (or cwd if not a repo)
@@ -143,6 +148,11 @@ cmd_play() {
   local event="$1"
   local cwd_hint
   cwd_hint="$(read_hook_cwd)"
+
+  [ -e "$STATE_DIR/paused" ] && exit 0
+  local pkey
+  pkey="$(resolve_project_key "$cwd_hint")"
+  [ -n "$pkey" ] && [ -e "$STATE_DIR/$pkey.paused" ] && exit 0
 
   local sound="" winning_key=""
   while IFS= read -r key; do
@@ -271,7 +281,9 @@ cmd_off() {
   printf '%s reset to default sound.\n' "$key"
 }
 
-cmd_test() {
+# Resolve which key wins and which sounds will fire for Stop/Notification.
+# Echoes three lines: winning_key, stop_sound, notify_sound.
+resolve_active_sound() {
   local winning_key=""
   while IFS= read -r key; do
     if [ -r "$STATE_DIR/$key.txt" ] \
@@ -290,6 +302,13 @@ cmd_test() {
   notify_sound="$generic"
   [ -r "$STATE_DIR/$winning_key.stop" ]   && stop_sound="$(head -n1 "$STATE_DIR/$winning_key.stop"   | tr -d '[:space:]')"
   [ -r "$STATE_DIR/$winning_key.notify" ] && notify_sound="$(head -n1 "$STATE_DIR/$winning_key.notify" | tr -d '[:space:]')"
+
+  printf '%s\n%s\n%s\n' "$winning_key" "$stop_sound" "$notify_sound"
+}
+
+cmd_test() {
+  local winning_key stop_sound notify_sound
+  { read -r winning_key; read -r stop_sound; read -r notify_sound; } < <(resolve_active_sound)
 
   printf 'Resolved: %s\n' "$winning_key"
   printf '  Stop:         %s\n' "$stop_sound"
@@ -330,6 +349,72 @@ cmd_key() {
   fi
 }
 
+cmd_pause() {
+  if [ "${1:-}" = "all" ]; then
+    : > "$STATE_DIR/paused"
+    echo "Paused (global). All projects are silenced until /notify resume all."
+    return
+  fi
+  local key
+  key="$(resolve_project_key)"
+  if [ -z "$key" ]; then
+    echo "Cannot determine project. Run /notify pause from inside a project directory, or use /notify pause all." >&2
+    exit 1
+  fi
+  : > "$STATE_DIR/$key.paused"
+  printf 'Paused (%s). Sound assignment preserved; /notify resume to re-enable.\n' "$key"
+}
+
+cmd_resume() {
+  if [ "${1:-}" = "all" ]; then
+    rm -f "$STATE_DIR/paused"
+    echo "Resumed (global)."
+    return
+  fi
+  local key
+  key="$(resolve_project_key)"
+  if [ -z "$key" ]; then
+    echo "Cannot determine project. Run /notify resume from inside a project directory, or use /notify resume all." >&2
+    exit 1
+  fi
+  rm -f "$STATE_DIR/$key.paused"
+  printf 'Resumed (%s).\n' "$key"
+}
+
+cmd_status() {
+  local pkey
+  pkey="$(resolve_project_key)"
+
+  local global_paused=0 project_paused=0
+  [ -e "$STATE_DIR/paused" ] && global_paused=1
+  [ -n "$pkey" ] && [ -e "$STATE_DIR/$pkey.paused" ] && project_paused=1
+
+  local state_label="active"
+  if [ "$global_paused" -eq 1 ] && [ "$project_paused" -eq 1 ]; then
+    state_label="PAUSED (global + project)"
+  elif [ "$global_paused" -eq 1 ]; then
+    state_label="PAUSED (global)"
+  elif [ "$project_paused" -eq 1 ]; then
+    state_label="PAUSED (project)"
+  fi
+
+  local winning_key stop_sound notify_sound
+  { read -r winning_key; read -r stop_sound; read -r notify_sound; } < <(resolve_active_sound)
+
+  local sound_line="$stop_sound"
+  [ "$notify_sound" != "$stop_sound" ] && sound_line="$stop_sound / $notify_sound"
+  [ "$state_label" != "active" ] && sound_line="$sound_line (silenced)"
+
+  printf 'Project: %s\n' "${pkey:-<unknown>}"
+  printf 'Status:  %s\n' "$state_label"
+  printf 'Sound:   %s\n' "$sound_line"
+  printf '  Stop:         %s\n' "$stop_sound"
+  printf '  Notification: %s\n' "$notify_sound"
+  echo
+  echo "Resolution chain:"
+  cmd_key
+}
+
 # --- dispatch ----------------------------------------------------------------
 
 cmd="${1:-}"
@@ -337,11 +422,14 @@ shift || true
 
 case "$cmd" in
   stop|notify) cmd_play "$cmd" ;;
-  set)         cmd_set  "$@" ;;
+  set)         cmd_set    "$@" ;;
   list)        cmd_list ;;
-  add)         cmd_add  "$@" ;;
+  add)         cmd_add    "$@" ;;
   off)         cmd_off ;;
   test)        cmd_test ;;
+  pause)       cmd_pause  "$@" ;;
+  resume)      cmd_resume "$@" ;;
+  status)      cmd_status ;;
   key)         cmd_key ;;
   ""|help|-h|--help)
     sed -n '/^# notify-sound.sh/,/^# ----/p' "$0" | sed 's/^# \{0,1\}//' | sed '/^----/d'

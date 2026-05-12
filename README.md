@@ -30,6 +30,10 @@ In any Claude Code session, from inside a project directory:
 /notify frog           # this project plays frog from now on
 /notify test           # replay the currently set sound
 /notify off            # clear this project (revert to default)
+/notify pause          # silence this project (sound assignment preserved)
+/notify pause all      # silence every project until /notify resume all
+/notify resume         # un-pause this project
+/notify status         # show pause state and active sound
 /notify add ~/Downloads/cow.wav         # copy a custom sound into your library
 /notify add ~/Downloads/cow.wav as moo  # …and rename it on the way in
 ```
@@ -40,6 +44,29 @@ After `/notify frog`, you'll hear the frog sound when:
 
 Run Claude in different repos, give each a different sound. You'll
 always know which project is calling for you.
+
+## Pause
+
+Need silence for a stretch without losing your sound assignment?
+
+```
+/notify pause       # this project goes silent until /notify resume
+/notify pause all   # every project goes silent until /notify resume all
+/notify resume      # un-pause this project
+/notify resume all  # un-pause globally
+/notify status      # check whether you're paused and which sound is active
+```
+
+Pause is a marker file (`<key>.paused` per project, `paused` for global) —
+it short-circuits the hook before sound resolution, so playback skips
+entirely. Project pause and global pause are independent: resuming one
+doesn't clear the other.
+
+`/notify status` reports paused-or-active, the project key, the sound
+that *would* play if it weren't silenced, and the full resolution chain.
+
+Unlike `/notify off` (which deletes the sound assignment), pause
+preserves everything — `/notify resume` brings back the same sound.
 
 ## How it works
 
@@ -76,8 +103,10 @@ bundled `frog.aiff`.
 
 ### Resolution chain
 
-When a hook fires, the script picks the first match from this ordered
-list:
+When a hook fires, the script first checks for pause markers
+(`paused` for global, `<project-key>.paused` for the current project) —
+if either exists, the hook exits silently. Otherwise it picks the first
+match from this ordered list:
 
 1. **`project-<slug>.txt`** — what `/notify` writes.
 2. **`pane-<id>.txt`** — *legacy*, kept readable so v0.1 installs don't
@@ -85,7 +114,8 @@ list:
 3. **`default.txt`** — last-resort fallback.
 
 Run `notify-sound.sh key` from inside a project to see the chain and
-which key wins.
+which key wins, or `notify-sound.sh status` for the full picture
+including pause state.
 
 ## Per-event sounds (advanced)
 
