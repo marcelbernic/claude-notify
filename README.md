@@ -7,8 +7,8 @@ pane or terminal window it's in — open ten panes against the same repo,
 they all share the same sound; switch to a different repo, you hear a
 different one.
 
-> Status: v0.3 — macOS only, friends-and-family release. Bug reports and
-> PRs welcome.
+> Status: v0.3 — macOS and Linux. Friends-and-family release. Bug
+> reports and PRs welcome.
 
 ---
 
@@ -100,6 +100,7 @@ State lives outside the plugin so it survives upgrades cleanly:
 ~/.claude/data/notify/
 ├── library/                         # your custom sounds
 ├── packs/                           # your custom packs
+├── cache/                           # auto-converted WAVs (Linux fallback)
 └── state/
     ├── project-<slug>.txt           # single-sound assignment
     ├── project-<slug>.json          # pack assignment + per-pack excludes
@@ -136,8 +137,15 @@ These take precedence over `project-<slug>.txt`.
 
 ## Caveats
 
-1. **macOS only.** Uses `afplay`. Linux/Windows support would need
-   `paplay`/`aplay` or equivalent.
+1. **Audio player required.** Picks the first available of `afplay`,
+   `paplay`, `pw-play`, `ffplay`, `play` (sox), `mpv`, `aplay`. With no
+   player installed, hooks log a warning to stderr and exit silently.
+   Players that don't handle every shipped format (`aplay` → WAV only;
+   `paplay`/`pw-play` → no `.mp3`/`.m4a`) trigger lazy conversion to WAV
+   via `ffmpeg` or `sox`; converted files are cached under
+   `~/.claude/data/notify/cache/`. If neither converter is installed,
+   the warning fires once per hook fire and playback falls through to
+   the original file (which may not play).
 2. **New sessions only.** Hooks are read once at Claude Code startup —
    the session you installed from won't fire hooks until you restart.
 3. **Same-named projects collide.** Two unrelated repos both named
@@ -150,7 +158,7 @@ These take precedence over `project-<slug>.txt`.
 
 ## Roadmap
 
-- [ ] Linux support
+- [ ] Windows support
 - [ ] Volume control per project
 - [ ] Subtype filtering for `Notification` (silence `auth_success`)
 - [ ] Per-event sounds via skill (no manual file editing)

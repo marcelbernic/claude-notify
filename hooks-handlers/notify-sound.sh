@@ -31,6 +31,7 @@
 #   ~/.claude/data/notify/state/<key>.notify Notification-event override
 #   ~/.claude/data/notify/state/<key>.paused per-project pause marker
 #   ~/.claude/data/notify/state/paused       global pause marker
+#   ~/.claude/data/notify/cache/             converted-for-Linux audio (lazy)
 #
 # Key resolution chain (first match wins):
 #   1. project-<slug>     slug = basename of cwd's git-root (or cwd if not a repo)
@@ -53,6 +54,7 @@ USER_DATA="${HOME}/.claude/data/notify"
 USER_LIB="$USER_DATA/library"
 USER_PACKS="$USER_DATA/packs"
 STATE_DIR="$USER_DATA/state"
+CACHE_DIR="$USER_DATA/cache"
 DEFAULT_SOUND="default"
 SUPPORTED_EXTS=(aiff mp3 wav m4a caf)
 
@@ -292,22 +294,159 @@ pick_random_pack_sound() {
   return 1
 }
 
-play_detached() {
-  local file="$1"
-  if ! command -v afplay >/dev/null 2>&1; then
-    printf '[notify-sound] afplay not found (macOS only); cannot play %s\n' "$file" >&2
-    return 1
+# --- audio playback (cross-platform) ----------------------------------------
+
+# Player probe order: macOS first, then common Linux options. Players later in
+# the list (aplay) handle fewer formats; we lean on prepare_playable_file to
+# bridge the gap via conversion.
+AUDIO_PLAYERS=(afplay paplay pw-play ffplay play mpv aplay)
+_AUDIO_PLAYER=""
+_AUDIO_PLAYER_PROBED=0
+_WARNED_NO_PLAYER=0
+_WARNED_CONVERT=0
+
+# Echo the first available audio player (or empty); cache after first probe.
+select_audio_player() {
+  if [ "$_AUDIO_PLAYER_PROBED" -eq 1 ]; then
+    printf '%s' "$_AUDIO_PLAYER"
+    return 0
   fi
-  ( afplay "$file" >/dev/null 2>&1 & ) >/dev/null 2>&1
+  _AUDIO_PLAYER_PROBED=1
+  local p
+  for p in "${AUDIO_PLAYERS[@]}"; do
+    if command -v "$p" >/dev/null 2>&1; then
+      _AUDIO_PLAYER="$p"
+      break
+    fi
+  done
+  printf '%s' "$_AUDIO_PLAYER"
+}
+
+# Invoke <player> on <file>. mode = "detached" (background) or "blocking".
+play_with() {
+  local player="$1" file="$2" mode="$3"
+  local cmd=()
+  case "$player" in
+    afplay)               cmd=(afplay "$file") ;;
+    paplay|pw-play)       cmd=("$player" "$file") ;;
+    aplay)                cmd=(aplay -q "$file") ;;
+    ffplay)               cmd=(ffplay -nodisp -autoexit -loglevel quiet "$file") ;;
+    play)                 cmd=(play -q "$file") ;;
+    mpv)                  cmd=(mpv --really-quiet --no-video "$file") ;;
+    *) return 127 ;;
+  esac
+  if [ "$mode" = "detached" ]; then
+    ( "${cmd[@]}" >/dev/null 2>&1 & ) >/dev/null 2>&1
+  else
+    "${cmd[@]}" >/dev/null 2>&1
+  fi
+}
+
+# 0 if the file should be converted to WAV before passing to <player>.
+needs_conversion() {
+  local player="$1" file="$2" ext
+  ext="${file##*.}"
+  ext="$(printf '%s' "$ext" | tr '[:upper:]' '[:lower:]')"
+  case "$player" in
+    afplay|ffplay|mpv|play) return 1 ;;       # handle ~everything we ship
+    paplay|pw-play)
+      case "$ext" in
+        wav|aiff|aif|aifc|flac|ogg|oga|au) return 1 ;;
+        *) return 0 ;;
+      esac ;;
+    aplay)
+      case "$ext" in wav) return 1 ;; *) return 0 ;; esac ;;
+  esac
+  return 1
+}
+
+# Short stable hash of a string. shasum is on macOS; sha1sum on Linux.
+hash_path() {
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$1" | shasum | cut -c1-12
+  elif command -v sha1sum >/dev/null 2>&1; then
+    printf '%s' "$1" | sha1sum | cut -c1-12
+  else
+    printf '%s' "$1" | tr -c 'a-zA-Z0-9' '_'
+  fi
+}
+
+# Convert <src> to <dst> as WAV using whichever tool is available. 0 on success.
+convert_to_wav() {
+  local src="$1" dst="$2" tmp
+  mkdir -p "$(dirname "$dst")"
+  tmp="${dst}.tmp.$$.wav"
+  if command -v ffmpeg >/dev/null 2>&1; then
+    if ffmpeg -y -loglevel error -i "$src" -f wav "$tmp" >/dev/null 2>&1; then
+      mv "$tmp" "$dst" && return 0
+    fi
+  elif command -v sox >/dev/null 2>&1; then
+    if sox "$src" -t wav "$tmp" >/dev/null 2>&1; then
+      mv "$tmp" "$dst" && return 0
+    fi
+  elif command -v afconvert >/dev/null 2>&1; then
+    if afconvert -f WAVE -d LEI16 "$src" "$tmp" >/dev/null 2>&1; then
+      mv "$tmp" "$dst" && return 0
+    fi
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+# Return a path the selected player can play. Lazily converts and caches.
+# Falls back to the original path with a warning if conversion isn't possible.
+prepare_playable_file() {
+  local file="$1" player
+  player="$(select_audio_player)"
+  if [ -z "$player" ] || ! needs_conversion "$player" "$file"; then
+    printf '%s' "$file"
+    return 0
+  fi
+  local base hash cached
+  base="$(basename "$file")"
+  base="${base%.*}"
+  hash="$(hash_path "$file")"
+  cached="$CACHE_DIR/${base}-${hash}.wav"
+  if [ -r "$cached" ]; then
+    printf '%s' "$cached"
+    return 0
+  fi
+  if convert_to_wav "$file" "$cached"; then
+    printf '%s' "$cached"
+    return 0
+  fi
+  if [ "$_WARNED_CONVERT" -eq 0 ]; then
+    printf '[notify-sound] cannot convert %s for player %s — install ffmpeg or sox; playback may fail\n' \
+      "$file" "$player" >&2
+    _WARNED_CONVERT=1
+  fi
+  printf '%s' "$file"
+}
+
+_warn_no_player() {
+  if [ "$_WARNED_NO_PLAYER" -eq 0 ]; then
+    printf '[notify-sound] no audio player found (looked for: %s)\n' "${AUDIO_PLAYERS[*]}" >&2
+    _WARNED_NO_PLAYER=1
+  fi
+}
+
+play_detached() {
+  local file="$1" player playable
+  player="$(select_audio_player)"
+  if [ -z "$player" ]; then _warn_no_player; return 1; fi
+  playable="$(prepare_playable_file "$file")"
+  play_with "$player" "$playable" detached
 }
 
 play_blocking() {
-  local file="$1"
-  if ! command -v afplay >/dev/null 2>&1; then
-    printf '[notify-sound] afplay not found (macOS only)\n' >&2
+  local file="$1" player playable
+  player="$(select_audio_player)"
+  if [ -z "$player" ]; then _warn_no_player; return 1; fi
+  playable="$(prepare_playable_file "$file")"
+  if ! play_with "$player" "$playable" blocking; then
+    printf '[notify-sound] %s failed to play %s\n' "$player" "$playable" >&2
     return 1
   fi
-  afplay "$file"
 }
 
 # Validate a name token (sound or pack) — no slashes, spaces, or leading dot.
