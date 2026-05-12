@@ -9,6 +9,7 @@
 #   add <path> [as <name>]  Copy a custom sound into the user library.
 #   off                     Clear the current project's assignment.
 #   test                    Replay the current assignment (random pick if a pack).
+#   preview <name>          Play a single sound once without changing state.
 #   pause [all]             Silence this project (or all projects with `all`).
 #   resume [all]            Undo pause for this project (or all with `all`).
 #   status                  Show pause state, active sound, and resolution chain.
@@ -695,6 +696,23 @@ resolve_active_sound() {
   printf '%s\n%s\n\n%s\n\n' "$winning_key" "$stop_sound" "$notify_sound"
 }
 
+cmd_preview() {
+  local sound="${1:-}"
+  if [ -z "$sound" ]; then
+    echo "Usage: notify-sound.sh preview <sound>" >&2
+    exit 1
+  fi
+  validate_name "$sound" || exit 1
+  local file
+  file="$(find_sound_file "$sound" || true)"
+  if [ -z "$file" ]; then
+    echo "Sound '$sound' not in library. Try: notify-sound.sh list" >&2
+    exit 1
+  fi
+  printf 'Previewing: %s\n' "$sound"
+  play_blocking "$file" || true
+}
+
 cmd_test() {
   local winning_key stop_sound stop_file notify_sound notify_file
   { read -r winning_key
@@ -1050,6 +1068,7 @@ case "$cmd" in
   add)         cmd_add    "$@" ;;
   off)         cmd_off ;;
   test)        cmd_test ;;
+  preview)     cmd_preview "$@" ;;
   pause)       cmd_pause  "$@" ;;
   resume)      cmd_resume "$@" ;;
   status)      cmd_status ;;

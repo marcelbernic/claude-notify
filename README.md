@@ -28,6 +28,7 @@ From inside any project directory:
 ```
 /notify <name>            # set this project's sound (e.g. /notify frog)
 /notify list              # list available sounds
+/notify preview <name>    # play a sound once without changing state
 /notify test              # replay the current sound
 /notify off               # clear assignment (revert to default)
 /notify status            # show current sound, pause state, resolution
